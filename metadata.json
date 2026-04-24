@@ -1,0 +1,6 @@
+{
+  "name": "Cloudinary QuickUpload",
+  "description": "A sleek, single-page tool to instantly upload photos to Cloudinary using unsigned presets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
