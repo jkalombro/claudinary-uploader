@@ -1,14 +1,4 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState, useRef, ChangeEvent } from 'react';
+import React, { useState, useRef, ChangeEvent, FormEvent } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   CloudUpload, 
@@ -20,10 +10,17 @@ import {
   ChevronRight,
   AlertCircle,
   Loader2,
-  Trash2
+  Trash2,
+  Lock,
+  ArrowRight
 } from 'lucide-react';
 import { Toaster, toast } from 'react-hot-toast';
 import { cn } from './lib/utils';
+
+// Environment variables
+const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+const UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+const APP_PASSWORD = import.meta.env.VITE_APP_PASSWORD;
 
 interface UploadResponse {
   secure_url: string;
@@ -34,28 +31,57 @@ interface UploadResponse {
 }
 
 export default function App() {
-  const [cloudName, setCloudName] = useState('');
-  const [uploadPreset, setUploadPreset] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('app_auth_token') === APP_PASSWORD;
+  });
+  const [passwordInput, setPasswordInput] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
-  const [showConfig, setShowConfig] = useState(true);
+  const [uploadStats, setUploadStats] = useState<{size: string, format: string} | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const maskString = (str: string) => {
+    if (!str) return 'NOT_CONFIGURED';
+    if (str.length <= 4) return '•••••';
+    return str.slice(0, 3) + '••••' + str.slice(-2);
+  };
+
+  const handlePasswordSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === APP_PASSWORD) {
+      setIsAuthenticated(true);
+      localStorage.setItem('app_auth_token', passwordInput);
+      toast.success('Access granted');
+    } else {
+      toast.error('Incorrect password');
+      setPasswordInput('');
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('app_auth_token');
+    setIsAuthenticated(false);
+    toast.success('Logged out');
+  };
+
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      if (!selectedFile.type.startsWith('image/')) {
-        toast.error('Please select an image file');
-        return;
-      }
-      setFile(selectedFile);
-      const url = URL.createObjectURL(selectedFile);
-      setPreviewUrl(url);
-      setUploadedUrl(null);
+    if (selectedFile) processFile(selectedFile);
+  };
+
+  const processFile = (selectedFile: File) => {
+    if (!selectedFile.type.startsWith('image/')) {
+      toast.error('Please select an image file');
+      return;
     }
+    setFile(selectedFile);
+    const url = URL.createObjectURL(selectedFile);
+    setPreviewUrl(url);
+    setUploadedUrl(null);
+    setUploadStats(null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -67,16 +93,7 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     const droppedFile = e.dataTransfer.files?.[0];
-    if (droppedFile) {
-      if (!droppedFile.type.startsWith('image/')) {
-        toast.error('Please drop an image file');
-        return;
-      }
-      setFile(droppedFile);
-      const url = URL.createObjectURL(droppedFile);
-      setPreviewUrl(url);
-      setUploadedUrl(null);
-    }
+    if (droppedFile) processFile(droppedFile);
   };
 
   const clearSelection = () => {
@@ -84,28 +101,28 @@ export default function App() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     setUploadedUrl(null);
+    setUploadStats(null);
   };
 
   const handleUpload = async () => {
-    if (!cloudName || !uploadPreset) {
-      toast.error('Please provide Cloud Name and Upload Preset');
-      setShowConfig(true);
+    if (!CLOUD_NAME || !UPLOAD_PRESET) {
+      toast.error('Cloudinary environment variables missing. Check your settings.');
       return;
     }
 
     if (!file) {
-      toast.error('Please select a photo first');
+      toast.error('No photo selected');
       return;
     }
 
     setIsUploading(true);
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('upload_preset', uploadPreset);
+    formData.append('upload_preset', UPLOAD_PRESET);
 
     try {
       const response = await fetch(
-        `https://api.cloudinary.com/v1_1/${cloudName.trim()}/image/upload`,
+        `https://api.cloudinary.com/v1_1/${CLOUD_NAME.trim()}/image/upload`,
         {
           method: 'POST',
           body: formData,
@@ -119,7 +136,11 @@ export default function App() {
 
       const data: UploadResponse = await response.json();
       setUploadedUrl(data.secure_url);
-      toast.success('Image uploaded successfully!');
+      setUploadStats({
+        size: (file.size / (1024 * 1024)).toFixed(2) + ' MB',
+        format: data.format.toUpperCase()
+      });
+      toast.success('Pushed to cloud!');
     } catch (error) {
       console.error('Upload error:', error);
       toast.error(error instanceof Error ? error.message : 'Error uploading image');
@@ -130,100 +151,168 @@ export default function App() {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast.success('URL copied to clipboard!');
+    toast.success('Copied!');
   };
 
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4 md:p-8 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-50 via-slate-50 to-indigo-50">
-      <Toaster position="top-right" />
-      
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-2xl bg-white rounded-3xl shadow-xl shadow-blue-900/5 border border-white/60 overflow-hidden"
-      >
-        {/* Header */}
-        <div className="p-6 md:p-8 border-b border-slate-100 flex items-center justify-between bg-white/50 backdrop-blur-sm">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-600/20">
-              <CloudUpload className="text-white w-6 h-6" />
+  if (!isAuthenticated) {
+    return (
+      <div className="h-screen w-screen bg-[#0A0A0A] flex items-center justify-center font-sans tracking-tight">
+        <Toaster position="top-right" />
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-sm p-8 bg-zinc-900 border border-zinc-800 rounded-3xl"
+        >
+          <div className="flex items-center gap-4 mb-8">
+            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center">
+              <Lock className="text-black w-6 h-6" />
             </div>
             <div>
-              <h1 className="text-xl md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-600">
-                Cloudinary QuickUpload
-              </h1>
-              <p className="text-sm text-slate-500 font-medium">Unsigned Instant Uploads</p>
+              <h2 className="text-xl font-black uppercase">Protected</h2>
+              <p className="text-zinc-500 text-xs font-mono uppercase tracking-widest">Entry required</p>
             </div>
           </div>
-          <button 
-            onClick={() => setShowConfig(!showConfig)}
-            className={cn(
-              "p-2 rounded-full transition-all duration-200",
-              showConfig ? "bg-blue-50 text-blue-600 ring-2 ring-blue-100" : "bg-slate-50 text-slate-400 hover:bg-slate-100"
-            )}
-          >
-            <Settings className="w-5 h-5" />
-          </button>
+          <form onSubmit={handlePasswordSubmit} className="space-y-6">
+            <div className="group">
+              <label className="block text-[10px] uppercase font-bold text-zinc-500 mb-2 group-focus-within:text-white transition-colors">Access Token</label>
+              <input 
+                type="password"
+                value={passwordInput}
+                autoFocus
+                onChange={(e) => setPasswordInput(e.target.value)}
+                className="w-full bg-black border border-zinc-800 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-white transition-all placeholder:text-zinc-700"
+                placeholder="••••••••"
+              />
+            </div>
+            <button className="w-full bg-white text-black font-black uppercase py-4 rounded-xl text-sm hover:bg-zinc-200 transition-all flex items-center justify-center gap-2">
+              Verify
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </form>
+        </motion.div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen w-screen bg-[#0A0A0A] text-white flex flex-col lg:flex-row overflow-x-hidden font-sans">
+      <Toaster position="top-right" />
+      
+      {/* Left Section: Brand - Hidden on mobile, visible on LG */}
+      <div className="hidden lg:flex lg:w-3/5 p-16 flex-col justify-between border-r border-zinc-900 bg-[radial-gradient(circle_at_top_right,_#1a1a1a,_transparent)] sticky top-0 h-screen">
+        <div>
+          <div className="text-zinc-500 font-mono text-sm tracking-[0.3em] mb-12 uppercase flex items-center gap-3">
+             <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+             Cloudinary Utility v2.0
+          </div>
+          <h1 className="text-huge font-black leading-[0.8] tracking-tighter">
+            IMAGE<br/><span className="text-zinc-800 font-black">PUSH.</span>
+          </h1>
         </div>
 
-        <div className="p-6 md:p-8 space-y-8">
-          {/* Config Section */}
+        <div className="text-[10px] text-zinc-800 font-mono flex items-center gap-3 tracking-[0.2em]">
+          <div className="w-1.5 h-1.5 bg-zinc-800 rounded-full"></div>
+          NO DATABASE PERSISTENCE ACTIVE
+        </div>
+      </div>
+
+      {/* Right Section: Main Flow */}
+      <div className="w-full lg:w-2/5 bg-[#050505] p-8 md:p-16 flex flex-col justify-center relative min-h-screen">
+        <div className="lg:hidden mb-12 mt-8 lg:mt-0">
+           <h1 className="text-6xl font-black leading-none tracking-tighter mb-2 italic">PUSH.</h1>
+           <div className="text-zinc-600 font-mono text-[10px] tracking-widest uppercase flex items-center gap-2">
+              <span className="w-1 h-1 bg-zinc-700 rounded-full"></span>
+              Cloudinary Utility
+           </div>
+        </div>
+
+        <div className="max-w-md w-full mx-auto space-y-12">
+          {/* Success State Card - Moved here for mobile visibility */}
           <AnimatePresence>
-            {showConfig && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden space-y-4"
+            {uploadedUrl && (
+              <motion.div 
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="bg-zinc-900 border border-emerald-500/20 p-6 md:p-8 rounded-3xl shadow-2xl shadow-emerald-500/5"
               >
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Cloud Name</label>
-                    <input 
-                      type="text" 
-                      value={cloudName}
-                      onChange={(e) => setCloudName(e.target.value)}
-                      placeholder="e.g. duo7wzsk5"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-700"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Upload Preset (Unsigned)</label>
-                    <input 
-                      type="text" 
-                      value={uploadPreset}
-                      onChange={(e) => setUploadPreset(e.target.value)}
-                      placeholder="e.g. ml_default"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium text-slate-700"
-                    />
-                  </div>
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-4 h-4 rounded-full bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)] animate-pulse"></div>
+                  <span className="text-emerald-400 font-black text-xs uppercase tracking-[0.2em]">Upload Successful</span>
                 </div>
-                <div className="flex items-start gap-2 p-3 bg-amber-50 rounded-lg text-amber-800 text-xs border border-amber-100">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <p>Make sure your preset is configured as <strong>Unsigned</strong> in Cloudinary Settings - Upload.</p>
+                <div className="space-y-4">
+                  <div className="bg-black p-3 rounded-xl border border-zinc-800 flex justify-between items-center group overflow-hidden">
+                    <code className="text-[10px] md:text-xs text-zinc-400 truncate w-48 md:w-64 block font-mono">
+                      {uploadedUrl}
+                    </code>
+                    <button 
+                      onClick={() => copyToClipboard(uploadedUrl)}
+                      className="bg-zinc-800 hover:bg-white hover:text-black text-white text-[10px] px-4 py-2 rounded-lg uppercase font-black transition-all shrink-0"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <p className="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">
+                      Size: {uploadStats?.size} &bull; Format: {uploadStats?.format}
+                    </p>
+                    <a 
+                      href={uploadedUrl} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="ml-auto text-zinc-400 hover:text-white transition-colors p-2 hover:bg-zinc-800 rounded-lg"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  </div>
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Upload Area */}
-          <div className="relative">
+          <div>
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-2xl font-black uppercase tracking-tight">Configuration</h2>
+              <button 
+                onClick={logout}
+                className="px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full flex items-center gap-2 hover:border-red-500/50 hover:bg-red-500/10 transition-all group"
+              >
+                 <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full group-hover:bg-red-500"></span>
+                 <span className="text-[10px] uppercase font-bold text-zinc-400 group-hover:text-red-500">Exit Session</span>
+              </button>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl flex items-center gap-4">
+                <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shrink-0">
+                  <CloudUpload className="text-zinc-500 w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase font-bold text-zinc-600 tracking-widest">Target Cloud</p>
+                  <p className="text-sm font-mono truncate text-zinc-300">{maskString(CLOUD_NAME)}</p>
+                </div>
+              </div>
+              <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-2xl flex items-center gap-4">
+                <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shrink-0">
+                  <Settings className="text-zinc-500 w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] uppercase font-bold text-zinc-600 tracking-widest">Unsigned Preset</p>
+                  <p className="text-sm font-mono truncate text-zinc-300">{maskString(UPLOAD_PRESET)}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* File Upload Area */}
+          <div className="space-y-6">
             {!previewUrl ? (
-              <motion.div
-                whileHover={{ scale: 1.005 }}
-                whileTap={{ scale: 0.995 }}
+              <div 
                 onDragOver={handleDragOver}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-200 rounded-2xl p-12 flex flex-col items-center justify-center gap-4 bg-slate-50 hover:bg-slate-100 hover:border-blue-300 transition-all cursor-pointer group"
+                className="relative border-2 border-dashed border-zinc-800 rounded-3xl p-10 text-center hover:border-white hover:bg-zinc-900/30 transition-all cursor-pointer group"
               >
-                <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:shadow-md transition-all border border-slate-100">
-                  <ImageIcon className="w-8 h-8 text-slate-400 group-hover:text-blue-500 transition-colors" />
-                </div>
-                <div className="text-center">
-                  <h3 className="font-semibold text-slate-700">Drop your photo here</h3>
-                  <p className="text-sm text-slate-500 mt-1">or click to browse from computer</p>
-                </div>
                 <input 
                   type="file" 
                   ref={fileInputRef}
@@ -231,128 +320,51 @@ export default function App() {
                   accept="image/*"
                   className="hidden"
                 />
-              </motion.div>
+                <div className="flex flex-col items-center">
+                  <ImageIcon className="w-10 h-10 mb-4 text-zinc-600 group-hover:text-white group-hover:scale-110 transition-all duration-300" />
+                  <span className="font-black text-zinc-400 group-hover:text-white uppercase tracking-widest text-sm">Drop photo here</span>
+                  <span className="text-[10px] text-zinc-700 mt-2 uppercase font-mono">Max size 10MB</span>
+                </div>
+              </div>
             ) : (
-              <motion.div 
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="relative rounded-2xl overflow-hidden aspect-video bg-slate-100 border border-slate-200 group"
-              >
-                <img 
-                  src={previewUrl} 
-                  alt="Preview" 
-                  className="w-full h-full object-contain"
-                />
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+              <div className="relative group rounded-3xl overflow-hidden aspect-video border border-zinc-800 bg-black">
+                <img src={previewUrl} alt="Preview" className="w-full h-full object-contain" />
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all duration-300 flex items-center justify-center backdrop-blur-sm">
                   <button 
                     onClick={clearSelection}
-                    className="p-3 bg-white/20 hover:bg-red-500 text-white rounded-full backdrop-blur-md transition-all"
-                    title="Remove image"
+                    className="p-4 bg-red-500/20 hover:bg-red-500 text-white rounded-full transition-all border border-red-500/20"
                   >
                     <Trash2 className="w-6 h-6" />
                   </button>
                 </div>
-              </motion.div>
+              </div>
             )}
-          </div>
-
-          {/* Action Button */}
-          {previewUrl && !uploadedUrl && (
-            <motion.button
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
+            
+            <button 
               onClick={handleUpload}
-              disabled={isUploading}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold rounded-2xl transition-all shadow-lg shadow-blue-600/30 flex items-center justify-center gap-2 group overflow-hidden relative"
+              disabled={isUploading || !file}
+              className={cn(
+                "w-full font-black uppercase py-5 rounded-full text-sm transition-all tracking-[0.3em] flex items-center justify-center gap-3",
+                isUploading || !file 
+                  ? "bg-zinc-900 text-zinc-600 cursor-not-allowed" 
+                  : "bg-white text-black hover:scale-[1.02] active:scale-100"
+              )}
             >
               {isUploading ? (
                 <>
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  <span>Uploading to Cloudinary...</span>
+                  PUSHING...
                 </>
               ) : (
                 <>
-                  <span>Upload Image</span>
-                  <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                  INITIALIZE PUSH
+                  <ChevronRight className="w-4 h-4" />
                 </>
               )}
-            </motion.button>
-          )}
-
-          {/* Result Section */}
-          <AnimatePresence>
-            {uploadedUrl && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                exit={{ opacity: 0, height: 0 }}
-                className="space-y-4 pt-4"
-              >
-                <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl flex items-center gap-3">
-                  <div className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center shrink-0 shadow-lg shadow-emerald-500/20">
-                    <CheckCircle2 className="text-white w-6 h-6" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-emerald-900">Upload Complete!</h3>
-                    <p className="text-xs text-emerald-700 font-medium whitespace-nowrap overflow-hidden text-ellipsis">
-                      Your photo is safe in the cloud.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider ml-1">Secure Image URL</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-slate-600 font-mono text-sm truncate select-all">
-                      {uploadedUrl}
-                    </div>
-                    <button 
-                      onClick={() => copyToClipboard(uploadedUrl)}
-                      className="p-3 bg-white border border-slate-200 hover:border-blue-500 text-slate-400 hover:text-blue-600 rounded-xl transition-all shadow-sm"
-                      title="Copy to clipboard"
-                    >
-                      <Copy className="w-5 h-5" />
-                    </button>
-                    <a 
-                      href={uploadedUrl} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="p-3 bg-white border border-slate-200 hover:border-blue-500 text-slate-400 hover:text-blue-600 rounded-xl transition-all shadow-sm flex items-center"
-                      title="Open in new tab"
-                    >
-                      <ExternalLink className="w-5 h-5" />
-                    </a>
-                  </div>
-                </div>
-                
-                <button 
-                  onClick={clearSelection}
-                  className="w-full py-3 text-slate-500 hover:text-slate-700 font-semibold text-sm transition-colors"
-                >
-                  Upload another one
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {/* Footer info */}
-        {!uploadedUrl && (
-          <div className="bg-slate-50 p-6 md:p-8 flex items-center justify-center gap-6 border-t border-slate-100">
-            <div className="flex items-center gap-2 text-slate-400 text-xs font-medium uppercase tracking-widest">
-              <span>Fast</span>
-              <div className="w-1 h-1 bg-slate-300 rounded-full" />
-              <span>Secure</span>
-              <div className="w-1 h-1 bg-slate-300 rounded-full" />
-              <span>Simple</span>
-            </div>
+            </button>
           </div>
-        )}
-      </motion.div>
-
-      {/* Decorative background elements */}
-      <div className="fixed top-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-100/50 blur-[100px] rounded-full -z-10" />
-      <div className="fixed bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-100/50 blur-[100px] rounded-full -z-10" />
+        </div>
+      </div>
     </div>
   );
 }
